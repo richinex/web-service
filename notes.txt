@@ -1,0 +1,30 @@
+web-service/
+├── cmd/
+│   └── server/
+│       └── main.go
+├── internal/
+│   ├── api/
+│   │   ├── handlers.go
+│   │   ├── routes.go
+│   │   ├── server.go
+│   │   ├── middleware.go
+│   │   ├── encode.go
+│   │   └── validate.go
+│   ├── config/
+│   │   └── config.go
+│   └── storage/
+│       └── comments.go
+├── pkg/
+│   └── logging/
+│       └── logger.go
+├── test/
+│   └── integration/
+│       └── main_test.go
+├── go.mod
+└── go.sum
+go test -v ./test/integration
+
+# Unused variables
+https://stackoverflow.com/questions/21743841/how-to-avoid-annoying-error-declared-and-not-used
+
+=== PAUSE and === CONT indicates they were run concurrently

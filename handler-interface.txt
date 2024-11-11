@@ -1,0 +1,186 @@
+Great question! I understand why this might be confusing.
+
+In your middleware function, even though you're wrapping the handler with http.HandlerFunc, you still need to explicitly call next.ServeHTTP(w, r) to pass control to the next handler in the chain.
+
+Let's break this down step by step.
+Understanding http.Handler and http.HandlerFunc
+
+First, let's recall what http.Handler and http.HandlerFunc are in Go's net/http package:
+
+    http.Handler is an interface that has a single method:
+
+type Handler interface {
+    ServeHTTP(ResponseWriter, *Request)
+}
+
+http.HandlerFunc is a type that allows you to convert ordinary functions into http.Handler objects:
+
+type HandlerFunc func(ResponseWriter, *Request)
+
+It has a method ServeHTTP, which calls the function itself:
+
+    func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+        f(w, r)
+    }
+
+Wrapping Functions with http.HandlerFunc
+
+When you wrap your function with http.HandlerFunc, you're creating an http.Handler from a function with the signature func(http.ResponseWriter, *http.Request). This allows your function to satisfy the http.Handler interface.
+
+However, wrapping your function with http.HandlerFunc does not automatically call the ServeHTTP method of the next handler in your middleware chain. It simply allows your function to be treated as an http.Handler.
+Why You Need to Call next.ServeHTTP(w, r)
+
+In your middleware, you are responsible for controlling the flow of the request. This includes deciding:
+
+    Whether to proceed to the next handler.
+    Whether to handle the request entirely within the middleware.
+    Whether to modify the request or response.
+
+By explicitly calling next.ServeHTTP(w, r), you're telling the middleware to pass control to the next handler in the chain. If you don't call it, the request will stop at your middleware, and the next handler will not be invoked.
+Your Middleware Function Explained
+
+Let's look at your middleware function with added explanations:
+
+func newAuthMiddleware(jwtSecret string) func(http.Handler) http.Handler {
+    // Initialize the JWT manager with the secret and token expiry duration
+    jwtManager := auth.NewJWTManager(jwtSecret, 24*time.Hour)
+
+    // Return a function that takes the next handler and returns a new handler
+    return func(next http.Handler) http.Handler {
+        // Create and return a new handler function
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // Skip authentication for specific endpoints
+            if r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/login" {
+                // Call the next handler without authentication
+                next.ServeHTTP(w, r)
+                return
+            }
+
+            // Extract the Authorization header
+            authHeader := r.Header.Get("Authorization")
+            if !strings.HasPrefix(authHeader, "Bearer ") {
+                // If the header is missing or incorrect, return Unauthorized
+                http.Error(w, "Unauthorized", http.StatusUnauthorized)
+                return
+            }
+
+            // Extract the token from the header
+            tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+
+            // Validate the token using the JWT manager
+            claims, err := jwtManager.ValidateToken(tokenStr)
+            if err != nil {
+                // If the token is invalid, return Unauthorized
+                http.Error(w, "Invalid token", http.StatusUnauthorized)
+                return
+            }
+
+            // Add user information to the context
+            ctx := context.WithValue(r.Context(), UserIDKey, claims.UserID)
+            ctx = context.WithValue(ctx, UserRoleKey, claims.Role)
+
+            // Call the next handler, passing the updated context
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+
+Key Points:
+
+    Creating the Middleware Function:
+        newAuthMiddleware returns a function that wraps the next handler (next http.Handler) with additional logic.
+
+    Using http.HandlerFunc:
+        We use http.HandlerFunc to convert our closure into an http.Handler.
+        This is necessary because the ServeMux and other components expect handlers to implement the http.Handler interface.
+
+    Controlling the Flow:
+        Inside the middleware, you have full control over whether or not to call next.ServeHTTP(w, r).
+        If you decide not to call it (e.g., due to an authentication failure), the request processing stops there.
+
+    Explicitly Calling next.ServeHTTP(w, r):
+        When you decide to pass the request to the next handler (e.g., after successful authentication), you must explicitly call next.ServeHTTP(w, r).
+        This is the mechanism by which the middleware chain progresses.
+
+Why Wrapping Doesn't Automatically Call next.ServeHTTP
+
+    Wrapping with http.HandlerFunc only makes your function satisfy the http.Handler interface by providing a ServeHTTP method.
+
+    It does not automatically invoke ServeHTTP on the next handler.
+
+    This design gives you, the developer, the flexibility to:
+        Perform actions before the next handler is called (e.g., logging, authentication checks).
+        Decide whether to call the next handler at all.
+        Perform actions after the next handler has been called (e.g., modifying the response).
+
+Illustrative Example
+
+Consider a simplified middleware that logs requests:
+
+func loggingMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Log the request method and URL
+        log.Printf("Received request: %s %s", r.Method, r.URL.Path)
+
+        // Call the next handler
+        next.ServeHTTP(w, r)
+
+        // Optionally, perform actions after the next handler
+    })
+}
+
+In this example:
+
+    We must call next.ServeHTTP(w, r) to continue processing the request.
+    If we omit this call, the request will not reach the actual handler intended to process it.
+
+The Chain of Responsibility Pattern
+
+The middleware pattern in Go's net/http package is an implementation of the Chain of Responsibility design pattern:
+
+    Each handler (middleware) decides whether to:
+        Handle the request itself.
+        Pass the request to the next handler in the chain.
+        Do both (e.g., modify the request/response and then pass it along).
+
+    This pattern provides great flexibility and composability in handling HTTP requests.
+
+Visual Representation
+
+Here's a simplified visualization:
+
+Incoming Request
+      |
+      v
+ [Auth Middleware] -- if authenticated --> [Next Handler]
+      |                                        |
+      |-- if not authenticated --> [Response: Unauthorized]
+
+    The middleware intercepts the request.
+    If authentication succeeds, it calls next.ServeHTTP(w, r).
+    If authentication fails, it writes an error response and does not call next.ServeHTTP(w, r).
+
+Summary
+
+    Wrapping in http.HandlerFunc:
+        Converts a function into an http.Handler.
+        Does not automatically call ServeHTTP on the next handler.
+
+    Explicitly Calling next.ServeHTTP(w, r):
+        Necessary to pass control to the next handler in the chain.
+        Gives you control over the flow of the request.
+
+    Middleware Responsibility:
+        Perform pre-processing (e.g., authentication, logging).
+        Decide whether to proceed to the next handler.
+        Optionally perform post-processing after the next handler.
+
+Conclusion
+
+In your middleware, you need to:
+
+    Wrap your handler function with http.HandlerFunc to satisfy the http.Handler interface.
+    Explicitly call next.ServeHTTP(w, r) when you want the request to continue to the next handler.
+    Omit the call to next.ServeHTTP(w, r) when you want to stop the request processing (e.g., when an error occurs).
+
+This design gives you full control over the request handling process, allowing you to build complex middleware chains that can modify and control the flow of HTTP requests in your application.
